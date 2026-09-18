@@ -18,6 +18,8 @@ The suite checks:
   remote `codex-smi` behavior;
 - exact argument forwarding to a fake Codex binary;
 - App Server handshake and structured `codex-smi` parsing;
+- display-focused Omarchy records, recommendations, private cache permissions,
+  manifest structure, and repeatable live installation;
 - JSON schema and example registry syntax;
 - absence of credential files and common token patterns in the repository.
 

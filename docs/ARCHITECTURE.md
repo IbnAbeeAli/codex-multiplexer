@@ -25,6 +25,10 @@ codex-smi ── JSON-RPC/stdio ──> codex app-server per account
                                 ├── account/read
                                 ├── account/rateLimits/read
                                 └── account/usage/read (optional)
+
+Omarchy panel ──> codex-mux omarchy ──> same parallel account probes
+       │                                  └── display-focused JSON
+       └── cached first ─────────────> omarchy-accounts.json (0600)
 ```
 
 `CODEX_HOME` is the credential isolation boundary. The launcher sets
@@ -41,6 +45,7 @@ and repairs broken absolute links after a move.
 | Path | Owner | Contains secrets | Shared |
 |---|---|---:|---:|
 | `registry.json` | Multiplexer | No tokens; may contain email | Yes |
+| `omarchy-accounts.json` | Multiplexer | No tokens; contains email and quota summary | Yes |
 | `accounts/<name>/auth.json` | Codex | Yes | No |
 | `shared/state_*.sqlite` | Codex | Chat metadata | Yes |
 | `shared/sessions/` | Codex | Chat transcripts/tool results | Yes |
@@ -48,6 +53,11 @@ and repairs broken absolute links after a move.
 
 The multiplexer never reads or copies `auth.json`. Login and refresh operations
 are delegated to the installed Codex CLI.
+
+The optional Omarchy QML panel is a display and interaction layer. It invokes
+the installed multiplexer command instead of inspecting credentials or
+reimplementing App Server requests. Its private cache contains identity and
+quota summaries only.
 
 ## Concurrency
 

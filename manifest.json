@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "ibnabeeali.codex-multiplexer",
+  "name": "Codex Multiplexer",
+  "version": "1.3.0",
+  "author": "IbnAbeeAli",
+  "license": "MIT",
+  "description": "A native Omarchy account dashboard for Codex Multiplexer.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "omarchy/Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Codex Accounts",
+    "description": "View every Codex account, remaining quota, reset time, and the recommended account.",
+    "category": "AI",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 300
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 30,
+        "max": 3600,
+        "step": 30,
+        "defaultValue": 300
+      }
+    ]
+  }
+}

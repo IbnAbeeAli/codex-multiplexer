@@ -7,6 +7,10 @@ Each account home contains Codex-managed authentication material in
 output, and working-directory details. Treat the entire multiplexer data root as
 sensitive even though `registry.json` itself contains no access tokens.
 
+The optional `omarchy-accounts.json` cache contains account names, emails,
+plans, quota percentages, and reset times. It contains no token material and is
+written atomically with mode `0600`, but it should still be treated as private.
+
 Do not commit or attach account homes, session rollouts, SQLite state, or debug
 archives to an issue. Transfer them only through an encrypted channel. The tool
 creates its data root and account homes with mode `0700` and its registry with
@@ -30,6 +34,12 @@ environment files, and Codex credential filenames. Keep the installed data root
 outside the source checkout. Before publishing a change, run
 `python3 scripts/verify.py`; it rejects credential files, common API-token and
 private-key patterns, and non-example email addresses.
+
+The Omarchy widget runs inside Omarchy's long-lived shell with the current
+user's permissions, as all third-party Omarchy plugins do. Its QML invokes only
+the installed `codex-mux` status command and the explicit right-click
+`codex-lb` launcher; it does not open account homes or credential files. Review
+plugin changes before installing or updating them.
 
 ## Reporting a problem
 

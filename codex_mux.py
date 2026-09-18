@@ -25,7 +25,7 @@ from typing import Any, Iterable
 
 
 APP_NAME = "codex-multiplexer"
-TOOL_VERSION = "1.2.0"
+TOOL_VERSION = "1.3.0"
 REGISTRY_VERSION = 1
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 DEFAULT_TIMEOUT = 15.0
@@ -1456,6 +1456,249 @@ def _main_rate_limit(rate_response: dict[str, Any]) -> dict[str, Any] | None:
     return single if isinstance(single, dict) else None
 
 
+def _probe_accounts(
+    registry: dict[str, Any],
+    selected: list[dict[str, Any]],
+    *,
+    include_usage: bool = False,
+    refresh_token: bool = True,
+    timeout: float = DEFAULT_TIMEOUT,
+    root: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Probe accounts concurrently while preserving registry order."""
+    probes_by_name: dict[str, dict[str, Any]] = {}
+    workers = min(max(1, len(selected)), 8)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(
+                probe_account,
+                registry,
+                account,
+                include_usage=include_usage,
+                refresh_token=refresh_token,
+                timeout=timeout,
+                root=root,
+            ): account["name"]
+            for account in selected
+        }
+        for future in as_completed(futures):
+            name = futures[future]
+            try:
+                probes_by_name[name] = future.result()
+            except Exception as exc:
+                probes_by_name[name] = {"name": name, "error": str(exc)}
+    return [probes_by_name[item["name"]] for item in selected]
+
+
+def _omarchy_limit_label(duration_minutes: Any, fallback: str) -> str:
+    if duration_minutes == 10080:
+        return "Weekly"
+    duration = _duration(duration_minutes)
+    if duration != "-":
+        return f"{duration} limit"
+    return fallback
+
+
+def _omarchy_limits(rate_response: Any) -> list[dict[str, Any]]:
+    if not isinstance(rate_response, dict):
+        return []
+    bucket = _main_rate_limit(rate_response)
+    if not isinstance(bucket, dict):
+        return []
+    rows: list[dict[str, Any]] = []
+    for window_name in ("primary", "secondary"):
+        window = bucket.get(window_name)
+        if not isinstance(window, dict):
+            continue
+        used = window.get("usedPercent")
+        if not isinstance(used, (int, float)) or isinstance(used, bool):
+            continue
+        reset = window.get("resetsAt")
+        rows.append(
+            {
+                "id": window_name,
+                "label": _omarchy_limit_label(
+                    window.get("windowDurationMins"),
+                    "Primary" if window_name == "primary" else "Secondary",
+                ),
+                "remainingPercent": max(0.0, min(100.0, 100.0 - float(used))),
+                "resetsAt": int(reset)
+                if isinstance(reset, (int, float)) and not isinstance(reset, bool)
+                else None,
+            }
+        )
+    return rows
+
+
+def omarchy_payload(
+    registry: dict[str, Any], probes: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Build the stable, display-focused record consumed by the Omarchy plugin."""
+    recommended: str | None = None
+    candidates = [
+        _balanced_candidate(account["name"], probe)
+        for account, probe in zip(registry["accounts"], probes)
+    ]
+    eligible = [
+        (index, item)
+        for index, item in enumerate(candidates)
+        if item["status"] == "eligible"
+    ]
+    if eligible:
+        eligible.sort(
+            key=lambda item: (
+                -float(item[1]["remaining_percent"]),
+                -float(item[1]["longest_window_remaining_percent"]),
+                item[0],
+            )
+        )
+        recommended = eligible[0][1]["alias"]
+
+    accounts: list[dict[str, Any]] = []
+    for configured, probe in zip(registry["accounts"], probes):
+        identity = probe.get("account")
+        identity = identity if isinstance(identity, dict) else {}
+        rate_response = probe.get("rateLimits")
+        limits = _omarchy_limits(rate_response)
+        email_matches = probe.get("emailMatchesExpected", True) is not False
+        status = "available"
+        status_label = "Available"
+        status_detail = ""
+
+        if probe.get("error"):
+            status = "unavailable"
+            status_label = "Unavailable"
+            status_detail = str(probe["error"])
+        elif not identity:
+            status = "login_required"
+            status_label = "Login required"
+            status_detail = "Run codex-as login " + configured["name"]
+        elif not email_matches:
+            status = "identity_mismatch"
+            status_label = "Email mismatch"
+            status_detail = "The signed-in identity does not match the configured email"
+        elif not isinstance(rate_response, dict) or not limits:
+            status = "unavailable"
+            status_label = "Limits unavailable"
+            status_detail = str(
+                probe.get("rateLimitsError") or "Codex did not report quota windows"
+            )
+        else:
+            least_remaining = min(float(item["remainingPercent"]) for item in limits)
+            if least_remaining <= 0:
+                status = "exhausted"
+                status_label = "Exhausted"
+            elif least_remaining <= 20:
+                status = "low"
+                status_label = "Low"
+
+        plan = identity.get("planType")
+        if not plan and isinstance(rate_response, dict):
+            main_bucket = _main_rate_limit(rate_response)
+            plan = main_bucket.get("planType") if isinstance(main_bucket, dict) else None
+            plan = plan or rate_response.get("planType")
+        email = identity.get("email") or configured.get("expectedEmail") or ""
+        accounts.append(
+            {
+                "id": configured["name"],
+                "name": configured["name"],
+                "email": str(email),
+                "plan": str(plan or ""),
+                "status": status,
+                "statusLabel": status_label,
+                "statusDetail": status_detail,
+                "isDefault": configured["name"] == registry.get("defaultAccount"),
+                "isRecommended": configured["name"] == recommended,
+                "emailMatchesExpected": email_matches,
+                "limits": limits,
+            }
+        )
+
+    return {
+        "schemaVersion": 1,
+        "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "defaultAccount": registry.get("defaultAccount"),
+        "recommendedAccount": recommended,
+        "accounts": accounts,
+    }
+
+
+def omarchy_cache_path(root: Path | None = None) -> Path:
+    return (root or data_root()) / "omarchy-accounts.json"
+
+
+def _write_omarchy_cache(payload: dict[str, Any], root: Path) -> None:
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        root.chmod(0o700)
+    path = omarchy_cache_path(root)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        path.chmod(0o600)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            temporary.unlink()
+
+
+def omarchy_main(argv: list[str], root: Path | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="codex-mux omarchy",
+        description="Emit the multi-account status record for the Omarchy bar plugin",
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"codex-multiplexer {TOOL_VERSION}"
+    )
+    parser.add_argument(
+        "--cached", action="store_true", help="Return the last successful status immediately"
+    )
+    parser.add_argument(
+        "--no-refresh", action="store_true", help="Do not refresh ChatGPT login tokens"
+    )
+    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
+    options = parser.parse_args(argv)
+    root = root or data_root()
+
+    if options.cached:
+        path = omarchy_cache_path(root)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise MuxError(f"no readable Omarchy account cache at {path}: {exc}") from exc
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schemaVersion") != 1
+            or not isinstance(payload.get("accounts"), list)
+        ):
+            raise MuxError(f"invalid Omarchy account cache at {path}")
+        payload["cached"] = True
+        print(json.dumps(payload, separators=(",", ":")))
+        return 0
+
+    if options.timeout <= 0:
+        raise MuxError("--timeout must be positive")
+    registry = load_registry(root=root)
+    selected = list(registry["accounts"])
+    ensure_layout(registry, root=root)
+    probes = _probe_accounts(
+        registry,
+        selected,
+        refresh_token=not options.no_refresh,
+        timeout=options.timeout,
+        root=root,
+    )
+    payload = omarchy_payload(registry, probes)
+    _write_omarchy_cache(payload, root)
+    print(json.dumps(payload, separators=(",", ":")))
+    return 0
+
+
 def _smi_rows(probes: list[dict[str, Any]]) -> list[list[str]]:
     """Build the compact, one-row-per-account usage table."""
     rows: list[list[str]] = []
@@ -1606,28 +1849,14 @@ def smi_main(argv: list[str], root: Path | None = None) -> int:
         else list(registry["accounts"])
     )
     ensure_layout(registry, root=root)
-    probes_by_name: dict[str, dict[str, Any]] = {}
-    workers = min(max(1, len(selected)), 8)
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(
-                probe_account,
-                registry,
-                account,
-                include_usage=options.usage,
-                refresh_token=not options.no_refresh,
-                timeout=options.timeout,
-                root=root,
-            ): account["name"]
-            for account in selected
-        }
-        for future in as_completed(futures):
-            name = futures[future]
-            try:
-                probes_by_name[name] = future.result()
-            except Exception as exc:
-                probes_by_name[name] = {"name": name, "error": str(exc)}
-    probes = [probes_by_name[item["name"]] for item in selected]
+    probes = _probe_accounts(
+        registry,
+        selected,
+        include_usage=options.usage,
+        refresh_token=not options.no_refresh,
+        timeout=options.timeout,
+        root=root,
+    )
     if options.json:
         print(json.dumps(probes, indent=2, sort_keys=False))
     elif options.details:
@@ -1721,14 +1950,16 @@ def main(argv: list[str] | None = None) -> int:
             return as_main(argv)
         if invocation == "codex-lb":
             return balanced_main(argv)
-        if argv and argv[0] in {"as", "smi", "lb"}:
+        if argv and argv[0] in {"as", "smi", "lb", "omarchy"}:
             mode = argv.pop(0)
             if mode == "as":
                 return as_main(argv)
             if mode == "smi":
                 return smi_main(argv)
-            return balanced_main(argv)
-        print("Usage: codex-mux {as|smi|lb} ...", file=sys.stderr)
+            if mode == "lb":
+                return balanced_main(argv)
+            return omarchy_main(argv)
+        print("Usage: codex-mux {as|smi|lb|omarchy} ...", file=sys.stderr)
         return 2
     except MuxError as exc:
         print(f"{invocation}: {exc}", file=sys.stderr)

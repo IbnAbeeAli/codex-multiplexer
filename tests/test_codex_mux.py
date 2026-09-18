@@ -2,6 +2,8 @@ import json
 import stat
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
@@ -264,6 +266,140 @@ class FormattingTests(unittest.TestCase):
                 registry,
             )
             self.assertEqual(env["CODEX_SQLITE_HOME"], str(root / "shared"))
+
+    def test_omarchy_payload_exposes_cards_and_recommended_account(self):
+        registry = codex_mux.default_registry()
+        registry["defaultAccount"] = "personal"
+        registry["accounts"] = [
+            {
+                "name": "personal",
+                "codexHome": "accounts/personal",
+                "aliases": [],
+                "expectedEmail": "personal@example.com",
+            },
+            {
+                "name": "work",
+                "codexHome": "accounts/work",
+                "aliases": [],
+                "expectedEmail": "work@example.com",
+            },
+        ]
+        probes = [
+            {
+                "name": "personal",
+                "account": {
+                    "type": "chatgpt",
+                    "email": "personal@example.com",
+                    "planType": "plus",
+                },
+                "emailMatchesExpected": True,
+                "rateLimits": {
+                    "rateLimits": {
+                        "limitId": "codex",
+                        "primary": {
+                            "usedPercent": 18,
+                            "windowDurationMins": 300,
+                            "resetsAt": 2_000_000_000,
+                        },
+                        "secondary": {
+                            "usedPercent": 36,
+                            "windowDurationMins": 10080,
+                            "resetsAt": 2_000_100_000,
+                        },
+                    }
+                },
+            },
+            {
+                "name": "work",
+                "account": {
+                    "type": "chatgpt",
+                    "email": "work@example.com",
+                    "planType": "team",
+                },
+                "emailMatchesExpected": True,
+                "rateLimits": {
+                    "rateLimits": {
+                        "limitId": "codex",
+                        "primary": {
+                            "usedPercent": 53,
+                            "windowDurationMins": 300,
+                            "resetsAt": 2_000_000_000,
+                        },
+                        "secondary": {
+                            "usedPercent": 9,
+                            "windowDurationMins": 10080,
+                            "resetsAt": 2_000_100_000,
+                        },
+                    }
+                },
+            },
+        ]
+
+        payload = codex_mux.omarchy_payload(registry, probes)
+
+        self.assertEqual(payload["recommendedAccount"], "personal")
+        self.assertEqual([item["name"] for item in payload["accounts"]], ["personal", "work"])
+        personal = payload["accounts"][0]
+        self.assertTrue(personal["isDefault"])
+        self.assertTrue(personal["isRecommended"])
+        self.assertEqual(personal["plan"], "plus")
+        self.assertEqual(
+            [(item["label"], item["remainingPercent"]) for item in personal["limits"]],
+            [("5h limit", 82.0), ("Weekly", 64.0)],
+        )
+
+    def test_omarchy_payload_marks_low_and_login_required_accounts(self):
+        registry = codex_mux.default_registry()
+        registry["accounts"] = [
+            {
+                "name": "low",
+                "codexHome": "accounts/low",
+                "aliases": [],
+                "expectedEmail": "low@example.com",
+            },
+            {
+                "name": "logged-out",
+                "codexHome": "accounts/logged-out",
+                "aliases": [],
+                "expectedEmail": "logged-out@example.com",
+            },
+        ]
+        probes = [
+            {
+                "name": "low",
+                "account": {"type": "chatgpt", "email": "low@example.com"},
+                "emailMatchesExpected": True,
+                "rateLimits": {
+                    "rateLimits": {
+                        "primary": {"usedPercent": 88, "windowDurationMins": 300}
+                    }
+                },
+            },
+            {"name": "logged-out", "account": None, "emailMatchesExpected": True},
+        ]
+
+        payload = codex_mux.omarchy_payload(registry, probes)
+
+        self.assertEqual(payload["accounts"][0]["status"], "low")
+        self.assertEqual(payload["accounts"][1]["status"], "login_required")
+        self.assertEqual(payload["accounts"][1]["email"], "logged-out@example.com")
+
+    def test_omarchy_cache_is_private_and_readable(self):
+        payload = {
+            "schemaVersion": 1,
+            "updatedAt": "2026-09-18T00:00:00+00:00",
+            "accounts": [],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            codex_mux._write_omarchy_cache(payload, root)
+            mode = stat.S_IMODE(codex_mux.omarchy_cache_path(root).stat().st_mode)
+            self.assertEqual(mode, 0o600)
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(codex_mux.omarchy_main(["--cached"], root=root), 0)
+            cached = json.loads(output.getvalue())
+            self.assertTrue(cached["cached"])
 
 
 if __name__ == "__main__":

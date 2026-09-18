@@ -42,6 +42,7 @@ done
 "$bin_dir/codex-as" --version >/dev/null
 "$bin_dir/codex-smi" --version >/dev/null
 "$bin_dir/codex-lb" --version >/dev/null
+"$bin_dir/codex-mux" omarchy --version >/dev/null
 
 printf 'Installed codex-as, codex-smi, codex-lb, and codex-mux in %s\n' "$bin_dir"
 printf 'Installed documentation and registry schema in %s\n' "$doc_dir"

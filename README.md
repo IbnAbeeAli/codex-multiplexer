@@ -27,11 +27,13 @@ parses, copies, or prints tokens from `auth.json`.
 - [Files and directories](#files-and-directories)
 - [Remote and headless hosts](#remote-and-headless-hosts)
 - [Move chats to another machine](#move-chats-to-another-machine)
+- [Omarchy bar plugin](#omarchy-bar-plugin)
 - [Import an existing Omarchy setup](#import-an-existing-omarchy-setup)
 - [Configuration](#configuration)
 - [Security and concurrency](#security-and-concurrency)
 - [Troubleshooting](#troubleshooting)
 - [Development and verification](#development-and-verification)
+- [Roadmap](#roadmap)
 
 ## Features
 
@@ -48,6 +50,7 @@ parses, copies, or prints tokens from `auth.json`.
 - Headless device-code authentication.
 - Relocatable paths for clean installations.
 - Codex-driven rollout reindexing after moving data.
+- Native Omarchy account cards with live remaining quota and reset countdowns.
 - Strict, versioned JSON registry schema.
 - No third-party Python dependencies.
 
@@ -135,6 +138,15 @@ codex-as work resume 0199cafe-0000-7000-8000-000000000000
 required by the multiplexer and should only be used in an appropriately isolated
 environment.
 
+Omarchy users can add the live account dashboard after this setup:
+
+```bash
+./install-omarchy-plugin.sh
+```
+
+The installer validates, rescans, and enables the widget through Omarchy IPC;
+it does not require restarting the desktop or shell.
+
 ## Installation and updates
 
 The default installation uses:
@@ -145,6 +157,7 @@ The default installation uses:
 | Python implementation | `~/.local/libexec/codex-multiplexer` |
 | Installed documentation | `~/.local/share/doc/codex-multiplexer` |
 | Mutable account/chat data | `$XDG_DATA_HOME/codex-multiplexer`, or `~/.local/share/codex-multiplexer` |
+| Optional Omarchy widget | `$XDG_CONFIG_HOME/omarchy/plugins/ibnabeeali.codex-multiplexer` |
 
 Add `~/.local/bin` to the login shell's `PATH` so the commands remain available
 after reconnecting or restarting. Put the same `export PATH=...` line in the
@@ -230,7 +243,12 @@ wrappers:
 codex-mux as acc1
 codex-mux smi --details
 codex-mux lb resume SESSION_ID
+codex-mux omarchy --no-refresh
 ```
+
+`codex-mux omarchy` emits the display-focused JSON record used by the native
+Omarchy widget. `--cached` returns the last private cached record immediately,
+and `--no-refresh` prevents login-token refresh during an automatic probe.
 
 ### Automatic account selection
 
@@ -424,6 +442,7 @@ layout:
 ~/.local/share/codex-multiplexer/
 ├── registry.json                 # non-token account metadata, mode 0600
 ├── registry.lock
+├── omarchy-accounts.json         # private account/quota display cache, mode 0600
 ├── account-locks/
 ├── accounts/
 │   ├── acc1/
@@ -443,6 +462,10 @@ The registry contract is documented in
 [`schema/registry.schema.json`](schema/registry.schema.json). Fresh account and
 shared-state paths are relative to the data root, making the complete tree
 relocatable.
+
+`omarchy-accounts.json` is an atomically written mode-`0600` display cache for
+the optional Omarchy widget. It contains account identity and quota summaries,
+not authentication tokens.
 
 ## Remote and headless hosts
 
@@ -505,6 +528,25 @@ paths outside the data root; `codex-as doctor` reports
 
 Do not place one writable SQLite/session tree on multiple machines
 simultaneously. Copy it only while all source Codex processes are stopped.
+
+## Omarchy bar plugin
+
+The native Omarchy widget opens directly to a four-account overview with
+account names, emails, plans, health, remaining quota bars, and reset
+countdowns. Clicking a card opens a focused account view; token-by-model and
+daily usage charts are intentionally excluded from the overview.
+
+Install or update it from this checkout after installing the CLI:
+
+```bash
+./install.sh
+./install-omarchy-plugin.sh
+```
+
+It loads its private cache immediately, refreshes live data asynchronously, and
+hot-reloads through Omarchy without a shell restart. See the
+[Omarchy integration guide](docs/OMARCHY.md) for interaction, public-repository
+installation, refresh settings, data flow, and troubleshooting.
 
 ## Import an existing Omarchy setup
 
@@ -675,6 +717,8 @@ It covers:
 - relocation and repair of legacy absolute links;
 - exact Codex argument forwarding;
 - App Server identity and rate-limit parsing;
+- Omarchy card records, cache permissions, plugin validation, and repeatable
+  live installation;
 - active and archived rollout reindexing;
 - migration discovery for default, custom, ambiguous, and already-shared homes;
 - copy-only imports, source preservation, duplicate detection, and conflicts;
@@ -696,6 +740,11 @@ make verify
 make install
 ```
 
+## Roadmap
+
+Potential improvements and follow-up Omarchy integration work are tracked in
+[the roadmap](docs/ROADMAP.md).
+
 ## License
 
 Codex Multiplexer is available under the [MIT License](LICENSE).
@@ -706,5 +755,7 @@ Codex Multiplexer is available under the [MIT License](LICENSE).
 - [Installation and portability](docs/PORTABILITY.md)
 - [Registry format](docs/REGISTRY.md)
 - [Verification strategy](docs/TESTING.md)
+- [Omarchy integration](docs/OMARCHY.md)
+- [Future improvements and integrations](docs/ROADMAP.md)
 - [Security guidance](SECURITY.md)
 - [Registry JSON Schema](schema/registry.schema.json)

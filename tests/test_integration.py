@@ -41,11 +41,16 @@ if "app-server" in args:
                 "windowDurationMins": 300,
                 "resetsAt": None,
             }
+            secondary = {
+                "usedPercent": 25,
+                "windowDurationMins": 10080,
+                "resetsAt": None,
+            }
             result = {
                 "rateLimits": {
                     "limitId": "codex",
                     "primary": primary,
-                    "secondary": None,
+                    "secondary": secondary,
                 },
                 "rateLimitsByLimitId": None,
                 "rateLimitResetCredits": {"availableCount": 3, "credits": None},
@@ -138,13 +143,37 @@ class CliIntegrationTests(unittest.TestCase):
         source = self.root.parent / "original-codex"
         session = source / "sessions" / "rollout-old.jsonl"
         session.parent.mkdir(parents=True)
-        session.write_text(json.dumps({"type": "session_meta", "payload": {
-            "id": "old-thread", "cwd": "/original/project"}}) + "\n")
-        result = self.run_mux("as", "migrate-sessions", "--from", str(source), "--apply", "--reindex")
+        session.write_text(
+            json.dumps(
+                {
+                    "type": "session_meta",
+                    "payload": {"id": "old-thread", "cwd": "/original/project"},
+                }
+            )
+            + "\n"
+        )
+        result = self.run_mux(
+            "as", "migrate-sessions", "--from", str(source), "--apply", "--reindex"
+        )
         self.assertIn("Copied 1 sessions", result.stdout)
         self.assertIn("Reindexed", result.stdout)
-        self.assertEqual((self.root / "shared/sessions/rollout-old.jsonl").read_bytes(),
-                         session.read_bytes())
+        self.assertEqual(
+            (self.root / "shared/sessions/rollout-old.jsonl").read_bytes(),
+            session.read_bytes(),
+        )
+
+    def test_omarchy_status_is_display_ready_and_cached(self):
+        result = self.run_mux("omarchy", "--no-refresh")
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["recommendedAccount"], "acc1")
+        self.assertEqual(payload["accounts"][0]["email"], "fake@example.com")
+        self.assertEqual(
+            [item["remainingPercent"] for item in payload["accounts"][0]["limits"]],
+            [60.0, 75.0],
+        )
+
+        cached = self.run_mux("omarchy", "--cached")
+        self.assertTrue(json.loads(cached.stdout)["cached"])
 
     def test_reindex_scans_active_and_archived_threads(self):
         result = self.run_mux("as", "reindex", "acc1")

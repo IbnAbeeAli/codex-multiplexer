@@ -45,13 +45,79 @@ def verify_json_documents() -> None:
         raise RuntimeError("example registry version does not match its schema")
 
 
+def verify_omarchy_plugin() -> None:
+    manifest_path = REPO / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    required = {"schemaVersion", "id", "name", "version", "kinds", "entryPoints"}
+    if not required.issubset(manifest):
+        raise RuntimeError("Omarchy plugin manifest is missing required fields")
+    if manifest["schemaVersion"] != 1:
+        raise RuntimeError("Omarchy plugin manifest schemaVersion must be 1")
+    if str(manifest["id"]).startswith("omarchy."):
+        raise RuntimeError("third-party Omarchy plugin uses the reserved namespace")
+    if "bar-widget" not in manifest["kinds"]:
+        raise RuntimeError("Omarchy plugin must declare the bar-widget kind")
+    entry = manifest.get("entryPoints", {}).get("barWidget")
+    if not isinstance(entry, str) or entry.startswith("/") or ".." in entry:
+        raise RuntimeError("Omarchy bar widget entry point is unsafe")
+    entry_path = REPO / entry
+    if not entry_path.is_file():
+        raise RuntimeError("Omarchy bar widget entry point is missing")
+    qml = entry_path.read_text(encoding="utf-8")
+    for expected in ('["codex-mux", "omarchy"', "remainingPercent", "resetsAt"):
+        if expected not in qml:
+            raise RuntimeError(f"Omarchy panel is missing required integration: {expected}")
+
+
+def verify_omarchy_installer() -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        base = Path(temporary)
+        fake_bin = base / "bin"
+        fake_bin.mkdir()
+        fake_omarchy = fake_bin / "omarchy"
+        fake_omarchy.write_text(
+            """#!/bin/sh
+if [ "$1" = plugin ] && [ "$2" = list ]; then
+  printf '[{"id":"ibnabeeali.codex-multiplexer"}]\\n'
+fi
+exit 0
+""",
+            encoding="utf-8",
+        )
+        fake_shell = fake_bin / "omarchy-shell"
+        fake_shell.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        fake_mux = fake_bin / "codex-mux"
+        fake_mux.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        for script in (fake_omarchy, fake_shell, fake_mux):
+            script.chmod(0o755)
+
+        env = os.environ.copy()
+        env["HOME"] = str(base / "home")
+        env["XDG_CONFIG_HOME"] = str(base / "config")
+        env["PATH"] = str(fake_bin) + os.pathsep + env.get("PATH", "")
+        installer = REPO / "install-omarchy-plugin.sh"
+        run(["sh", str(installer)], env=env)
+        run(["sh", str(installer)], env=env)
+
+        target = base / "config" / "omarchy" / "plugins" / "ibnabeeali.codex-multiplexer"
+        if (target / "manifest.json").read_bytes() != (REPO / "manifest.json").read_bytes():
+            raise RuntimeError("Omarchy installer did not install the current manifest")
+        if (target / "omarchy" / "Panel.qml").read_bytes() != (
+            REPO / "omarchy" / "Panel.qml"
+        ).read_bytes():
+            raise RuntimeError("Omarchy installer did not install the current panel")
+
+
 def verify_versions() -> None:
     source = (REPO / "codex_mux.py").read_text(encoding="utf-8")
     project = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    manifest = json.loads((REPO / "manifest.json").read_text(encoding="utf-8"))
     source_match = re.search(r'^TOOL_VERSION = "([^"]+)"$', source, re.MULTILINE)
     project_match = re.search(r'^version = "([^"]+)"$', project, re.MULTILINE)
     if not source_match or not project_match or source_match.group(1) != project_match.group(1):
         raise RuntimeError("codex_mux.py and pyproject.toml versions do not match")
+    if source_match.group(1) != manifest.get("version"):
+        raise RuntimeError("codex_mux.py and manifest.json versions do not match")
 
 
 def verify_no_credentials() -> None:
@@ -107,14 +173,20 @@ def verify_installation() -> None:
 def main() -> int:
     verify_python_sources()
     verify_json_documents()
+    verify_omarchy_plugin()
     verify_versions()
     verify_no_credentials()
-    for script in [REPO / "install.sh", *sorted((REPO / "bin").iterdir())]:
+    for script in [
+        REPO / "install.sh",
+        REPO / "install-omarchy-plugin.sh",
+        *sorted((REPO / "bin").iterdir()),
+    ]:
         run(["sh", "-n", str(script)])
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"], env=env)
     verify_installation()
+    verify_omarchy_installer()
     print("All repository verification checks passed.")
     return 0
 
