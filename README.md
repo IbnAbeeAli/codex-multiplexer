@@ -20,6 +20,7 @@ parses, copies, or prints tokens from `auth.json`.
 - [Features](#features)
 - [Requirements](#requirements)
 - [Five-minute setup](#five-minute-setup)
+- [Installation and updates](#installation-and-updates)
 - [Command reference](#command-reference)
 - [How shared sessions work](#how-shared-sessions-work)
 - [Files and directories](#files-and-directories)
@@ -50,7 +51,8 @@ parses, copies, or prints tokens from `auth.json`.
 ## Requirements
 
 - Python 3.10 or newer.
-- Codex CLI available on `PATH`.
+- [Codex CLI](https://learn.chatgpt.com/docs/codex/cli) available on `PATH`
+  (check with `codex --version`).
 - A writable, persistent user home directory.
 - Linux or macOS.
 
@@ -68,7 +70,7 @@ same WSL distribution.
 
 ## Five-minute setup
 
-Install the commands:
+Install the commands and make sure the install directory is on `PATH`:
 
 ```bash
 git clone https://github.com/IbnAbeeAli/codex-multiplexer.git
@@ -77,18 +79,26 @@ cd codex-multiplexer
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Log in one account at a time:
+Choose a short, stable name for each account and log in one account at a time.
+Using `--expect` is recommended when several ChatGPT accounts are available in
+the same browser because it rejects and clears a login for the wrong email.
+Replace the example addresses with the actual address for each account:
 
 ```bash
-codex-as add acc1
-codex-as add acc2
+codex-as add personal --expect you@example.com
+codex-as add work --expect you@company.example
 ```
 
-For a remote or headless machine, use device-code login:
+Each command starts Codex's normal browser login and waits until the selected
+identity has been verified. If `--expect` is omitted, the verified email reported
+by Codex is recorded automatically after the first successful login.
+
+For a remote or headless machine, add `--device-auth` and complete the displayed
+device-code flow instead:
 
 ```bash
-codex-as add acc1 --device-auth
-codex-as add acc2 --device-auth
+codex-as add personal --expect you@example.com --device-auth
+codex-as add work --expect you@company.example --device-auth
 ```
 
 Verify the setup:
@@ -99,24 +109,30 @@ codex-as doctor
 codex-smi --no-refresh
 ```
 
+`accounts` confirms the configured slots, `doctor` checks the installation and
+filesystem layout, and `codex-smi` asks Codex for live identity and quota data.
+
 Start Codex with the selected account:
 
 ```bash
-codex-as acc1
-codex-as acc2
+codex-as personal
+codex-as work
 ```
 
-Resume a thread under another account:
+There is no global “active account”: the selector immediately after `codex-as`
+chooses the account for that invocation. Open the shared resume picker, or resume
+a known thread under another account:
 
 ```bash
-codex-as acc2 resume 0199cafe-0000-7000-8000-000000000000
+codex-as personal resume
+codex-as work resume 0199cafe-0000-7000-8000-000000000000
 ```
 
 `--yolo` is a Codex option that disables approvals and sandboxing. It is not
 required by the multiplexer and should only be used in an appropriately isolated
 environment.
 
-## Installation details
+## Installation and updates
 
 The default installation uses:
 
@@ -125,10 +141,11 @@ The default installation uses:
 | Commands | `~/.local/bin` |
 | Python implementation | `~/.local/libexec/codex-multiplexer` |
 | Installed documentation | `~/.local/share/doc/codex-multiplexer` |
-| Mutable account/chat data | `~/.local/share/codex-multiplexer` |
+| Mutable account/chat data | `$XDG_DATA_HOME/codex-multiplexer`, or `~/.local/share/codex-multiplexer` |
 
 Add `~/.local/bin` to the login shell's `PATH` so the commands remain available
-after reconnecting or restarting.
+after reconnecting or restarting. Put the same `export PATH=...` line in the
+appropriate shell profile, such as `~/.bashrc` or `~/.zshrc`.
 
 Install into a different prefix:
 
@@ -139,23 +156,53 @@ CODEX_MULTIPLEXER_INSTALL_ROOT=/opt/codex-multiplexer ./install.sh
 Installed wrappers resolve the Python implementation relative to their own
 prefix, so custom installations do not depend on `~/.local`.
 
+To update an existing installation, update the checkout and run the installer
+again so the installed scripts and documentation are replaced:
+
+```bash
+git pull --ff-only
+./install.sh
+```
+
+For a custom prefix, set `CODEX_MULTIPLEXER_INSTALL_ROOT` again when updating.
+
 ## Command reference
 
 ### Account management
 
 | Command | Purpose |
 |---|---|
-| `codex-as add NAME` | Create an account slot and log in |
-| `codex-as add NAME --device-auth` | Add an account on a headless host |
-| `codex-as add NAME --expect EMAIL` | Pin the slot to an expected email |
-| `codex-as login NAME` | Log in again or replace cached authentication |
-| `codex-as logout NAME` | Log out only the selected account |
-| `codex-as accounts` | List account names, expected emails, and homes |
-| `codex-as default NAME` | Choose the maintenance/default account |
+| `codex-as add NAME [--expect EMAIL] [--device-auth]` | Create or reuse an account slot and log in |
+| `codex-as login NAME [--device-auth]` | Re-authenticate an existing slot |
+| `codex-as logout NAME` | Clear that slot's login while retaining the slot |
+| `codex-as accounts` | List names, expected emails, homes, and the default (`*`) |
+| `codex-as list` | Alias for `codex-as accounts` |
+| `codex-as default NAME` | Choose the account used by default for maintenance |
 | `codex-as doctor` | Validate installation, state, permissions, and rollouts |
-| `codex-as reindex [NAME]` | Ask Codex to rescan shared session rollouts |
+| `codex-as reindex [NAME] [--timeout SECONDS]` | Ask Codex to rescan shared session rollouts |
+| `codex-as import-omarchy [--registry PATH]` | Register an existing Omarchy account layout |
+| `codex-as --version` | Print the multiplexer version |
 
-The first successfully added account becomes the default account.
+Use `codex-as --help` for the top-level summary and `--help` with `add`, `login`,
+`reindex`, or `import-omarchy` for their argument details.
+
+Names are 1–64 characters, start with a letter or number, and may contain
+letters, numbers, `.`, `_`, and `-`. Avoid the management words `add`, `login`,
+`logout`, `accounts`, `list`, `default`, `doctor`, `reindex`, `import-omarchy`,
+and `help`, because those are interpreted as commands instead of selectors.
+
+The first account slot created becomes the default, even if its initial login is
+interrupted. A failed `add` therefore does not require another slot: retry with
+`codex-as login NAME`, optionally adding `--device-auth`. `logout` removes the
+selected slot's Codex credentials but does not delete its registry entry or
+shared chats. This release has no account-removal command; leaving a logged-out
+slot in the registry is safe. To intentionally assign a slot to a different
+identity, log it out and run `codex-as add NAME --expect NEW_EMAIL` with the same
+name.
+
+The default is used when `codex-as reindex` is run without an account argument.
+It does not create a persistent active account, and it does not limit the account
+pool considered by `codex-lb`.
 
 ### Running Codex
 
@@ -163,6 +210,7 @@ Everything after the account selector is passed to Codex unchanged:
 
 ```bash
 codex-as acc1
+codex-as acc1 resume
 codex-as acc1 --yolo
 codex-as acc1 exec "Run the tests"
 codex-as acc2 --yolo resume SESSION_ID
@@ -171,18 +219,37 @@ codex-as acc2 --yolo resume SESSION_ID
 Account selectors are case-insensitive and can also match a configured alias or
 expected email.
 
+The installed `codex-mux` command is a unified alternative to the dedicated
+wrappers:
+
+```bash
+codex-mux as acc1
+codex-mux smi --details
+codex-mux lb resume SESSION_ID
+```
+
 ### Automatic account selection
 
 `codex-lb` probes every configured account and launches Codex with the available
-account that has the most remaining quota:
+account that has the most remaining quota. It ignores accounts that are logged
+out, unavailable, exhausted, explicitly excluded, or already locked by another
+`codex-lb` process:
 
 ```bash
 codex-lb
 codex-lb resume SESSION_ID
+CODEX_MULTIPLEXER_EXCLUDE_ACCOUNTS=work codex-lb
+codex-lb --help
+codex-lb --version
 ```
 
 Set `CODEX_MULTIPLEXER_EXCLUDE_ACCOUNTS` to a comma-separated list of account
 names, aliases, or expected emails to omit from a particular launch.
+
+Selection uses the most constrained reported quota window and does not refresh
+login tokens while probing. `codex-lb` is intended for the per-slot ChatGPT
+logins managed by this project; it removes inherited `OPENAI_API_KEY`,
+`CODEX_API_KEY`, and `CODEX_ACCESS_TOKEN` values before launching Codex.
 
 ### Usage and limits
 
@@ -192,8 +259,10 @@ codex-smi acc1 acc2
 codex-smi --no-refresh
 codex-smi --info
 codex-smi --details
-codex-smi --usage
+codex-smi --usage --json
 codex-smi --json
+codex-smi --timeout 30
+codex-smi --version
 ```
 
 `codex-smi` queries each account concurrently through Codex App Server's
@@ -211,6 +280,13 @@ start a new session, and resume a session by picker or chat ID.
 - `--usage` additionally requests token-activity summaries.
 - `--no-refresh` avoids requesting a ChatGPT token refresh during inspection.
 - `--json` returns the structured response for scripts.
+- `--timeout SECONDS` changes the positive per-account App Server timeout from
+  its 15-second default.
+
+Token-activity data requested by `--usage` is included in JSON output; the
+compact and detailed tables remain quota-oriented. When combined with
+`--details`, `--json` takes precedence. Account arguments accept the same names,
+aliases, and expected emails as `codex-as`.
 
 Codex does not expose an exact universal “messages remaining” count because
 consumption depends on the model, task size, speed mode, and tool activity.
@@ -232,13 +308,20 @@ The launcher sets one shared `CODEX_SQLITE_HOME` and also passes the equivalent
 `sqlite_home` override. Managed account homes use relative links to the shared
 runtime directories.
 
+The multiplexer also forces Codex's file-based credential store so each login is
+kept in that account home's `auth.json`. Other files under `CODEX_HOME`, such as
+`config.toml`, profiles, logs, and skills, remain per-account unless you manage
+them separately. Only the SQLite state and the runtime directories shown above
+are shared by this project.
+
 The shared SQLite index records thread IDs and rollout paths. Because every
 account sees the same index and rollouts, both the session picker and explicit
 `resume SESSION_ID` can continue the same chat under another account.
 
 ## Files and directories
 
-A clean managed installation uses this layout:
+A clean managed installation without an `XDG_DATA_HOME` override uses this
+layout:
 
 ```text
 ~/.local/share/codex-multiplexer/
@@ -310,7 +393,8 @@ To preserve existing local chats:
 1. Stop every Codex process that uses the source data.
 2. Securely copy the complete multiplexer data directory.
 3. Install this repository on the destination machine.
-4. Log in each account again if authentication caches were not copied.
+4. Run `codex-as login NAME` for each account whose authentication cache was not
+   copied.
 5. Run `codex-as reindex` to repair destination rollout paths.
 6. Run `codex-as doctor` and `codex-smi --no-refresh`.
 
@@ -332,6 +416,15 @@ Existing Omarchy account homes can be registered without copying credentials:
 ```bash
 codex-as import-omarchy
 ```
+
+To import a registry from a non-default location:
+
+```bash
+codex-as import-omarchy --registry /path/to/codex-accounts.json
+```
+
+The default source registry is
+`~/.config/omarchy/agents/codex-accounts.json`.
 
 The importer reads the existing Omarchy account registry and:
 
@@ -355,11 +448,12 @@ installation created with `codex-as add` is self-contained instead.
 
 | Environment variable | Purpose | Default |
 |---|---|---|
-| `CODEX_MULTIPLEXER_HOME` | Registry, accounts, and shared state | `~/.local/share/codex-multiplexer` |
+| `CODEX_MULTIPLEXER_HOME` | Registry, accounts, and shared state | `$XDG_DATA_HOME/codex-multiplexer`, or `~/.local/share/codex-multiplexer` |
 | `CODEX_MULTIPLEXER_CODEX_BIN` | Explicit Codex executable | First `codex` on `PATH` |
 | `CODEX_MULTIPLEXER_INSTALL_ROOT` | Installer destination prefix | `~/.local` |
 | `CODEX_MULTIPLEXER_LIBEXEC` | Wrapper fallback implementation directory | `~/.local/libexec/codex-multiplexer` |
 | `CODEX_MULTIPLEXER_EXCLUDE_ACCOUNTS` | Accounts omitted by `codex-lb` | Empty |
+| `CODEX_MUX_ROUTE_RECORD` | Create a JSON record of a `codex-lb` routing decision | Unset |
 
 Example:
 
@@ -369,7 +463,12 @@ export CODEX_MULTIPLEXER_CODEX_BIN=/opt/codex/bin/codex
 ```
 
 The shorter compatibility variables `CODEX_MUX_HOME` and
-`CODEX_MUX_CODEX_BIN` are also recognized.
+`CODEX_MUX_CODEX_BIN` are also recognized. `CODEX_MUX_EXCLUDE_ALIASES` is a
+fallback for `CODEX_MULTIPLEXER_EXCLUDE_ACCOUNTS` when the latter is unset.
+
+`CODEX_MUX_ROUTE_RECORD` is intended for calling automation. The target must not
+already exist; `codex-lb` creates it with mode `0600` and records the candidate
+statuses, selected account, and selection reason.
 
 ## Security and concurrency
 
@@ -401,7 +500,9 @@ export PATH="$HOME/.local/bin:$PATH"
 codex-as login ACCOUNT
 ```
 
-Use `--device-auth` on a headless host.
+Use `--device-auth` on a headless host. If the initial `codex-as add` was
+interrupted, the account slot normally already exists, so use `login` rather
+than creating a differently named slot.
 
 ### Wrong browser account was used
 
@@ -438,6 +539,28 @@ App Server is unavailable. Check the login and retry:
 ```bash
 codex-as login ACCOUNT
 codex-smi ACCOUNT --no-refresh
+```
+
+### `codex-lb` reports that no account is selectable
+
+Inspect every account, then re-authenticate or wait for quota to reset as
+appropriate:
+
+```bash
+codex-smi --details --no-refresh
+codex-as login ACCOUNT
+```
+
+Also check `CODEX_MULTIPLEXER_EXCLUDE_ACCOUNTS`; an excluded, busy, logged-out,
+unavailable, or exhausted account is not eligible for automatic selection.
+
+### Repository changes are not reflected in installed commands
+
+The installer copies the implementation and documentation instead of running
+them from the checkout. Re-run it after pulling updates:
+
+```bash
+./install.sh
 ```
 
 ## Development and verification
