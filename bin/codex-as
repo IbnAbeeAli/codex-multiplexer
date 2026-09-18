@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -f "$script_dir/../codex_mux.py" ]; then
+  module="$script_dir/../codex_mux.py"
+elif [ -f "$script_dir/../libexec/codex-multiplexer/codex_mux.py" ]; then
+  module="$script_dir/../libexec/codex-multiplexer/codex_mux.py"
+else
+  module="${CODEX_MULTIPLEXER_LIBEXEC:-$HOME/.local/libexec/codex-multiplexer}/codex_mux.py"
+fi
+exec python3 "$module" as "$@"

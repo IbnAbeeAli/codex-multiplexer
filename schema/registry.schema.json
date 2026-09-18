@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:codex-multiplexer:registry-schema:v1",
+  "title": "Codex Multiplexer Registry",
+  "description": "Versioned, non-secret metadata describing isolated Codex account homes and shared local chat state.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "defaultAccount", "sharedState", "accounts"],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "const": 1,
+      "description": "Registry schema version."
+    },
+    "defaultAccount": {
+      "type": ["string", "null"],
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "sharedState": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Absolute, home-relative, environment-expanded, or registry-relative path used as Codex sqlite_home and shared rollout root."
+    },
+    "accounts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/account"
+      }
+    }
+  },
+  "$defs": {
+    "account": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "codexHome", "aliases"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        },
+        "codexHome": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Isolated CODEX_HOME for this account. Relative paths resolve from the multiplexer data root."
+        },
+        "aliases": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "expectedEmail": {
+          "type": "string",
+          "format": "email",
+          "description": "Optional identity pin checked after login and reported by codex-smi."
+        }
+      }
+    }
+  }
+}

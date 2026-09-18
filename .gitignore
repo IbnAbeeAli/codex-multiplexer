@@ -1,0 +1,38 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local configuration and environment secrets
+.env
+.env.*
+!.env.example
+
+# Codex Multiplexer runtime state (credentials, chats, and account metadata)
+/account-locks/
+/accounts/
+/shared/
+/sessions/
+/shell_snapshots/
+/thread-writer-locks/
+/registry.json
+/registry.lock
+auth.json
+credentials.json
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

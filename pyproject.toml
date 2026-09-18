@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codex-multiplexer"
+version = "1.2.0"
+description = "Persistent multi-account launcher and usage monitor for the Codex CLI"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+license = {file = "LICENSE"}
+authors = [{name = "Ali Raza"}]
+keywords = ["codex", "cli", "multi-account", "usage-monitor"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://github.com/IbnAbeeAli/codex-multiplexer"
+Repository = "https://github.com/IbnAbeeAli/codex-multiplexer.git"
+Issues = "https://github.com/IbnAbeeAli/codex-multiplexer/issues"
+
+[project.scripts]
+codex-as = "codex_mux:as_entry"
+codex-smi = "codex_mux:smi_entry"
+codex-lb = "codex_mux:lb_entry"
+codex-mux = "codex_mux:mux_entry"
+
+[tool.setuptools]
+py-modules = ["codex_mux"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

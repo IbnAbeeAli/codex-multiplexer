@@ -1,0 +1,20 @@
+{
+  "$schema": "../schema/registry.schema.json",
+  "version": 1,
+  "defaultAccount": "acc1",
+  "sharedState": "shared",
+  "accounts": [
+    {
+      "name": "acc1",
+      "codexHome": "accounts/acc1",
+      "aliases": [],
+      "expectedEmail": "first@example.com"
+    },
+    {
+      "name": "acc2",
+      "codexHome": "accounts/acc2",
+      "aliases": [],
+      "expectedEmail": "second@example.com"
+    }
+  ]
+}
