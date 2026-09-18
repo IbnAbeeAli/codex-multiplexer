@@ -22,6 +22,7 @@ parses, copies, or prints tokens from `auth.json`.
 - [Five-minute setup](#five-minute-setup)
 - [Installation and updates](#installation-and-updates)
 - [Command reference](#command-reference)
+- [Import chats from the original Codex home](#import-chats-from-the-original-codex-home)
 - [How shared sessions work](#how-shared-sessions-work)
 - [Files and directories](#files-and-directories)
 - [Remote and headless hosts](#remote-and-headless-hosts)
@@ -39,6 +40,8 @@ parses, copies, or prints tokens from `auth.json`.
 - Optional expected-email pinning to catch the wrong browser login.
 - Exact forwarding of Codex CLI arguments.
 - Shared session picker and cross-account `resume SESSION_ID`.
+- Preview-first import of existing Codex chats, with safe source discovery and
+  copy-only migration that preserves original files.
 - Live email, plan, quota windows, remaining percentage, reset time, and earned
   reset-credit reporting.
 - Quota-aware account selection across all configured accounts with `codex-lb`.
@@ -179,16 +182,17 @@ For a custom prefix, set `CODEX_MULTIPLEXER_INSTALL_ROOT` again when updating.
 | `codex-as list` | Alias for `codex-as accounts` |
 | `codex-as default NAME` | Choose the account used by default for maintenance |
 | `codex-as doctor` | Validate installation, state, permissions, and rollouts |
+| `codex-as migrate-sessions [--from PATH] [--apply]` | Discover and preview, or copy original chats without overwriting |
 | `codex-as reindex [NAME] [--timeout SECONDS]` | Ask Codex to rescan shared session rollouts |
 | `codex-as import-omarchy [--registry PATH]` | Register an existing Omarchy account layout |
 | `codex-as --version` | Print the multiplexer version |
 
 Use `codex-as --help` for the top-level summary and `--help` with `add`, `login`,
-`reindex`, or `import-omarchy` for their argument details.
+`migrate-sessions`, `reindex`, or `import-omarchy` for their argument details.
 
 Names are 1–64 characters, start with a letter or number, and may contain
 letters, numbers, `.`, `_`, and `-`. Avoid the management words `add`, `login`,
-`logout`, `accounts`, `list`, `default`, `doctor`, `reindex`, `import-omarchy`,
+`logout`, `accounts`, `list`, `default`, `doctor`, `migrate-sessions`, `reindex`, `import-omarchy`,
 and `help`, because those are interpreted as commands instead of selectors.
 
 The first account slot created becomes the default, even if its initial login is
@@ -291,6 +295,98 @@ aliases, and expected emails as `codex-as`.
 Codex does not expose an exact universal “messages remaining” count because
 consumption depends on the model, task size, speed mode, and tool activity.
 
+## Import chats from the original Codex home
+
+New multiplexer accounts share their chats, but transcripts in a separate original
+Codex home are not imported automatically. Configure at least one account first,
+then preview the import:
+
+```bash
+codex-as migrate-sessions
+```
+
+The preview reports known locations, the selected source, the shared destination,
+and how many sessions would be copied or skipped. After reviewing it, keep the
+source chats idle and copy them:
+
+```bash
+codex-as migrate-sessions --apply
+```
+
+`--apply` copies only: it does not launch Codex or modify existing databases.
+When ready, index the copied transcripts and resume through a configured account:
+
+```bash
+codex-as reindex acc1
+codex-as acc1 resume --all
+codex-as acc2 resume SESSION_ID
+```
+
+For a custom original home or multiple detected sources, use the same explicit
+path for preview and apply:
+
+```bash
+codex-as migrate-sessions --from /path/to/original-codex-home
+codex-as migrate-sessions --from /path/to/original-codex-home --apply
+```
+
+| Option | Behavior |
+|---|---|
+| No options | Discover known homes and preview; no writes |
+| `--from PATH` | Select a specific original Codex home |
+| `--apply` | Validate and copy; never overwrite existing files |
+| `--reindex` | With `--apply`, explicitly launch Codex to index the copies afterward |
+| `--account NAME` | Choose the account for explicit reindexing |
+| `--no-reindex` | Explicit copy-only mode; equivalent to the default |
+
+Without `--from`, discovery checks the current user's `~/.codex`, `CODEX_HOME`,
+and registered account locations, resolving and deduplicating paths. It reports
+transcript counts for original homes and labels managed accounts separately.
+Managed account homes are never selected automatically. One valid original home
+is selected; multiple homes containing chats require `--from PATH`. Unreadable or
+invalid candidates stop automatic selection. Arbitrary custom locations require
+`--from`; discovery does not scan the whole disk or read credentials. Neither
+installation prefixes nor another machine's username are hard-coded.
+
+Review the preview's source and destination before applying. For a custom source,
+repeat the same `--from PATH` with `--apply`; paths and contents are checked again.
+No interactive prompts are required, so the command also works over SSH.
+
+If the original home is already configured as shared state (for example after
+`import-omarchy`), the command reports that no copy is needed. Use `reindex` and
+`resume --all` to investigate missing picker entries.
+
+Keep sessions in the source home idle during the import. No processes are stopped
+or restarted. Preview does not write files or launch Codex. Apply copies active
+and archived JSONL transcripts into shared storage. Copying is offline and does
+not launch Codex or touch its databases. Run `codex-as reindex` separately when
+ready, or explicitly add `--reindex` to apply to invoke Codex App Server afterward.
+`--account NAME` chooses the account for explicit reindexing;
+otherwise it uses the default logged-in account. Archived chats remain archived.
+
+The original files stay intact. Authentication, configuration, skills, plugins,
+command history, shell snapshots, and SQLite databases are not copied. Transcript
+IDs, content, and project working directories are preserved; this command does
+not move projects or rewrite paths inside conversation messages. If a project has
+moved, select the appropriate working directory when resuming.
+
+All transcripts are validated before copying. Matching IDs with identical
+contents are skipped; conflicting IDs, malformed/incomplete transcripts, and
+nested transcript symlinks stop the import. Copies are staged and checked before
+being published without overwriting destination files. Imported files are private
+(mode 0600). A changing source detected during copying aborts publication. This
+check cannot prevent a source session from writing again afterward: keep source
+sessions idle, and continue imported chats through the multiplexer from then on.
+There is no ongoing synchronization with the original home.
+
+An interrupted publication can leave some complete copies in place; rerunning is
+safe and skips identical files. If reindexing fails, the copied transcripts remain
+available for a later `codex-as reindex`. Existing account session directories
+that do not point at shared storage must be resolved first; migration never
+replaces them. Reindexing rebuilds discoverability from transcripts rather than
+merging old database-only metadata, so custom titles or other database-only state
+may not transfer.
+
 ## How shared sessions work
 
 ```text
@@ -299,6 +395,7 @@ codex-as acc2 ──> CODEX_HOME=accounts/acc2 ──> private auth.json
                          │
                          ├── CODEX_SQLITE_HOME ──> shared/state_*.sqlite
                          ├── sessions ───────────> shared/sessions
+                         ├── archived sessions ──> shared/archived_sessions
                          ├── shell snapshots ────> shared/shell_snapshots
                          └── writer locks ───────> shared/thread-writer-locks
 ```
@@ -579,10 +676,17 @@ It covers:
 - exact Codex argument forwarding;
 - App Server identity and rate-limit parsing;
 - active and archived rollout reindexing;
+- migration discovery for default, custom, ambiguous, and already-shared homes;
+- copy-only imports, source preservation, duplicate detection, and conflicts;
+- interrupted imports, simulated disk failures, changing sources, and symlink rejection;
 - custom-prefix installation;
 - a clean simulated remote-host installation;
 - two sequential headless logins, cross-account resume, and remote diagnostics;
 - credential-file and common token-pattern detection in the repository.
+
+App Server and account operations in these tests use a simulated Codex executable.
+Passing the suite does not establish compatibility with every Codex release or
+verify live resumption of an imported conversation.
 
 Useful alternatives:
 

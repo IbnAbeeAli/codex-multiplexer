@@ -7,6 +7,7 @@ import argparse
 import contextlib
 import datetime as dt
 import fcntl
+import hashlib
 import json
 import os
 import queue
@@ -15,6 +16,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -263,6 +265,7 @@ def ensure_layout(
         state.chmod(0o700)
     shared_paths = {
         "sessions": state / "sessions",
+        "archived_sessions": state / "archived_sessions",
         "shell_snapshots": state / "shell_snapshots",
         "thread-writer-locks": state / "thread-writer-locks",
     }
@@ -817,6 +820,238 @@ def doctor(root: Path | None = None) -> int:
     portability = "self-contained" if self_contained else "uses imported/external paths"
     print(f"Portable data: {portability}")
     return 1 if problems else 0
+
+
+def _session_inventory(home: Path) -> dict[str, tuple[Path, str]]:
+    """Validate rollouts without retaining conversation contents in memory."""
+    sessions: dict[str, tuple[Path, str]] = {}
+    for directory in ("sessions", "archived_sessions"):
+        base = home / directory
+        if not base.exists():
+            continue
+        for folder, directories, _ in os.walk(base, followlinks=False):
+            for name in directories:
+                if (Path(folder) / name).is_symlink():
+                    raise MuxError(f"refusing nested session symlink: {Path(folder) / name}")
+        for path in sorted(base.rglob("*.jsonl")):
+            if path.is_symlink() or not path.is_file():
+                raise MuxError(f"refusing non-regular transcript: {path}")
+            # Account session roots may be shared links, but nested links are not trusted.
+            if any((base / parent).is_symlink()
+                   for parent in path.relative_to(base).parents if parent != Path(".")):
+                raise MuxError(f"refusing nested session symlink: {path}")
+            before = path.stat()
+            digest = hashlib.sha256()
+            session_id = None
+            try:
+                with path.open("rb") as handle:
+                    for index, line in enumerate(handle):
+                        digest.update(line)
+                        if not line.endswith(b"\n"):
+                            raise ValueError("incomplete final line")
+                        event = json.loads(line)
+                        if not isinstance(event, dict):
+                            raise ValueError("invalid event")
+                        if index == 0:
+                            payload = event.get("payload") or {}
+                            if event.get("type") != "session_meta" or not isinstance(payload, dict):
+                                raise ValueError("missing session metadata")
+                            session_id = payload.get("id")
+                            if not isinstance(session_id, str) or not SAFE_NAME.fullmatch(session_id):
+                                raise ValueError("invalid session id")
+            except (ValueError, UnicodeError) as exc:
+                raise MuxError(f"invalid or unfinished transcript: {path}") from exc
+            after = path.stat()
+            if (before.st_ino, before.st_size, before.st_mtime_ns) != (
+                after.st_ino, after.st_size, after.st_mtime_ns
+            ):
+                raise MuxError(f"transcript changed during inspection; retry when idle: {path}")
+            if session_id is None:
+                raise MuxError(f"empty transcript: {path}")
+            if session_id in sessions:
+                raise MuxError(f"duplicate session id {session_id} under {home}")
+            sessions[session_id] = (path, digest.hexdigest())
+    return sessions
+
+
+def discover_session_source(registry: dict[str, Any], root: Path) -> Path:
+    """Inspect known locations only; never guess among multiple original homes."""
+    state = shared_state_path(registry, root)
+    managed = {account_home(item, root) for item in registry["accounts"]}
+    locations: dict[Path, list[str]] = {}
+
+    def add(path: Path, label: str):
+        locations.setdefault(path.expanduser().resolve(), []).append(label)
+
+    add(Path.home() / ".codex", "default home")
+    if os.environ.get("CODEX_HOME"):
+        add(Path(os.environ["CODEX_HOME"]), "CODEX_HOME")
+    for item in registry["accounts"]:
+        add(account_home(item, root), f"account {item['name']}")
+    candidates = []
+    shared = []
+    invalid = False
+    print("Known Codex locations (read-only discovery):")
+    for path, labels in locations.items():
+        label = ", ".join(labels)
+        if path == state:
+            print(f"  {path} [{label}]: already shared")
+            shared.append(path)
+        elif path in managed:
+            print(f"  {path} [{label}]: managed account; not selected automatically")
+        elif not path.is_dir():
+            print(f"  {path} [{label}]: not found")
+        else:
+            try:
+                count = len(_session_inventory(path))
+            except (MuxError, OSError) as exc:
+                print(f"  {path} [{label}]: cannot validate ({exc})")
+                invalid = True
+                continue
+            print(f"  {path} [{label}]: {count} transcripts")
+            if count:
+                candidates.append(path)
+    print(f"Shared destination: {state}")
+    if invalid:
+        raise MuxError("a possible source could not be validated; choose a source with --from PATH")
+    if len(candidates) > 1:
+        raise MuxError("multiple original homes contain chats; choose one with --from PATH")
+    if candidates:
+        return candidates[0]
+    if shared:
+        return shared[0]
+    raise MuxError("no original chats found in known locations; use --from PATH for a custom home")
+
+
+def migrate_sessions_command(args: list[str], root: Path | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="codex-as migrate-sessions",
+        description="Preview or copy original Codex transcripts into shared history",
+    )
+    parser.add_argument("--from", dest="source",
+                        help="Original Codex home; otherwise discover known locations safely")
+    parser.add_argument("--apply", action="store_true", help="Copy after validation")
+    indexing = parser.add_mutually_exclusive_group()
+    indexing.add_argument("--reindex", action="store_true",
+                          help="Explicitly launch Codex to update its index after copying")
+    indexing.add_argument("--no-reindex", action="store_true",
+                          help="Copy only (the default; retained for compatibility)")
+    parser.add_argument("--account", help="Account to use for reindexing")
+    options = parser.parse_args(args)
+    root = root or data_root()
+    registry = load_registry(root=root)
+    source = (Path(options.source).expanduser().resolve() if options.source
+              else discover_session_source(registry, root))
+    state = shared_state_path(registry, root)
+    if not source.is_dir():
+        raise MuxError(f"source home does not exist: {source}")
+    if source == state:
+        print(f"Original Codex home is already the shared state: {state}")
+        print("No copy needed. If chats are missing, run `codex-as reindex`, then resume --all.")
+        return 0
+    if source in root.resolve().parents:
+        raise MuxError("multiplexer storage must not be inside the source home")
+    if source in state.parents or state in source.parents:
+        raise MuxError("source and shared state must be separate, non-nested directories")
+
+    for item in registry["accounts"]:
+        for directory in ("sessions", "archived_sessions"):
+            account_path = account_home(item, root) / directory
+            if (account_path.exists() or account_path.is_symlink()) and (
+                account_path.resolve() != (state / directory).resolve()
+            ):
+                raise MuxError(
+                    f"{item['name']}: {account_path} is not shared; "
+                    "resolve the existing account layout before importing"
+                )
+
+    def check_destination(path: Path):
+        for component in (path, *path.parents):
+            if component == state.parent:
+                break
+            if component.is_symlink():
+                raise MuxError(f"refusing symlink destination: {component}")
+
+    def plan():
+        for directory in ("sessions", "archived_sessions"):
+            check_destination(state / directory)
+        originals = _session_inventory(source)
+        existing = _session_inventory(state)
+        pending = []
+        unchanged = 0
+        for session_id, (path, digest) in originals.items():
+            if session_id in existing:
+                if existing[session_id][1] != digest:
+                    raise MuxError(f"session conflict: {session_id}; neither copy was overwritten")
+                unchanged += 1
+                continue
+            relative = path.relative_to(source)
+            target = state / relative
+            check_destination(target)
+            if target.exists() or target.is_symlink():
+                raise MuxError(f"destination conflict: {target}")
+            pending.append((session_id, path, relative, digest))
+        return pending, unchanged
+
+    pending, unchanged = plan()
+    print(f"Source: {source}\nDestination: {state}")
+    print(f"Sessions to copy: {len(pending)}; already present: {unchanged}")
+    if not options.apply:
+        print("Preview only. Keep source sessions idle, then rerun with --apply.")
+        return 0
+    if options.reindex:
+        selector = options.account or registry.get("defaultAccount")
+        if not selector:
+            raise MuxError("configure a default account or use --no-reindex")
+        account = resolve_account(registry, selector)
+        if not (account_home(account, root) / "auth.json").is_file():
+            raise MuxError("reindex requires a logged-in account; use --no-reindex to copy offline")
+    try:
+        with registry_lock(root):
+            # Recheck after acquiring the lock; two imports must not race each other.
+            if load_registry(root=root) != registry:
+                raise MuxError("registry changed; rerun migration")
+            pending, unchanged = plan()
+            state.mkdir(mode=0o700, parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix=".session-import-", dir=state) as staging:
+                stage = Path(staging)
+                for _, path, relative, digest in pending:
+                    staged = stage / relative
+                    staged.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    with path.open("rb") as src, staged.open("xb") as dst:
+                        shutil.copyfileobj(src, dst)
+                        dst.flush()
+                        os.fsync(dst.fileno())
+                    staged.chmod(0o600)
+                    # Hash the staged copy and the source again before publishing anything.
+                staged_inventory = _session_inventory(stage)
+                current = _session_inventory(source)
+                for session_id, _, _, digest in pending:
+                    if (staged_inventory[session_id][1] != digest
+                            or current.get(session_id, (None, None))[1] != digest):
+                        raise MuxError("source changed during migration; retry when idle")
+                for _, _, relative, _ in pending:
+                    target = state / relative
+                    check_destination(target)
+                    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    if target.parent.resolve() != target.parent:
+                        raise MuxError(f"refusing symlink destination: {target.parent}")
+                    # Atomic publication without overwriting a concurrent writer.
+                    os.link(stage / relative, target)
+        print(f"Copied {len(pending)} sessions. Original files are unchanged.")
+        if not options.reindex:
+            print("Run `codex-as reindex` before using the shared resume picker.")
+        else:
+            try:
+                reindex_command([options.account] if options.account else [], root)
+            except (MuxError, OSError) as exc:
+                raise MuxError("sessions copied; reindex failed. Retry `codex-as reindex`.") from exc
+        return 0
+    except OSError as exc:
+        raise MuxError(
+            "migration stopped without overwriting existing files; "
+            "some copies may have completed. Rerun the preview to reconcile."
+        ) from exc
 
 
 def reindex_command(args: list[str], root: Path | None = None) -> int:
@@ -1424,6 +1659,7 @@ def as_usage() -> None:
   codex-as doctor
   codex-as reindex [ACCOUNT]
   codex-as import-omarchy
+  codex-as migrate-sessions [--from CODEX_HOME] [--apply]
   codex-as ACCOUNT [codex arguments...]
 
 Examples:
@@ -1463,6 +1699,8 @@ def as_main(argv: list[str], root: Path | None = None) -> int:
         if rest:
             raise MuxError("doctor takes no arguments")
         return doctor(root)
+    if command == "migrate-sessions":
+        return migrate_sessions_command(rest, root)
     if command == "reindex":
         return reindex_command(rest, root)
     if command == "import-omarchy":

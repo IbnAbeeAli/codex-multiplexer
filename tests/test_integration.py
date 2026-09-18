@@ -134,6 +134,18 @@ class CliIntegrationTests(unittest.TestCase):
         self.assertEqual(payload[0]["account"]["email"], "fake@example.com")
         self.assertEqual(payload[0]["rateLimits"]["rateLimitResetCredits"]["availableCount"], 3)
 
+    def test_migration_cli_copies_and_reindexes(self):
+        source = self.root.parent / "original-codex"
+        session = source / "sessions" / "rollout-old.jsonl"
+        session.parent.mkdir(parents=True)
+        session.write_text(json.dumps({"type": "session_meta", "payload": {
+            "id": "old-thread", "cwd": "/original/project"}}) + "\n")
+        result = self.run_mux("as", "migrate-sessions", "--from", str(source), "--apply", "--reindex")
+        self.assertIn("Copied 1 sessions", result.stdout)
+        self.assertIn("Reindexed", result.stdout)
+        self.assertEqual((self.root / "shared/sessions/rollout-old.jsonl").read_bytes(),
+                         session.read_bytes())
+
     def test_reindex_scans_active_and_archived_threads(self):
         result = self.run_mux("as", "reindex", "acc1")
         self.assertIn("Reindexed 2 visible threads", result.stdout)
