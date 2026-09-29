@@ -167,6 +167,48 @@ class FormattingTests(unittest.TestCase):
             selected_env = execvpe.call_args.args[2]
             self.assertEqual(selected_env["CODEX_HOME"], str(root / "accounts" / "acc1"))
 
+    def test_balancer_neither_probes_nor_selects_excluded_accounts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            registry = codex_mux.default_registry()
+            registry["accounts"] = [
+                {"name": "info", "codexHome": "accounts/info", "aliases": []},
+                {"name": "codex", "codexHome": "accounts/codex", "aliases": []},
+            ]
+            registry["defaultAccount"] = "info"
+            codex_mux.save_registry(registry, root)
+            probed = []
+
+            def probe(_registry, account, **_kwargs):
+                probed.append(account["name"])
+                return {
+                    "name": account["name"],
+                    "account": {"type": "chatgpt"},
+                    "emailMatchesExpected": True,
+                    "rateLimits": {
+                        "rateLimits": {
+                            "limitId": "codex",
+                            "primary": {"usedPercent": 10, "windowDurationMins": 300},
+                        }
+                    },
+                }
+
+            with (
+                mock.patch.dict(
+                    codex_mux.os.environ,
+                    {"CODEX_MULTIPLEXER_EXCLUDE_ACCOUNTS": "codex"},
+                    clear=False,
+                ),
+                mock.patch.object(codex_mux, "probe_account", side_effect=probe),
+                mock.patch.object(codex_mux, "codex_binary", return_value="/usr/bin/codex"),
+                mock.patch.object(codex_mux.os, "execvpe") as execvpe,
+            ):
+                self.assertEqual(codex_mux.balanced_main([], root=root), 127)
+
+            self.assertEqual(probed, ["info"])
+            selected_env = execvpe.call_args.args[2]
+            self.assertEqual(selected_env["CODEX_HOME"], str(root / "accounts" / "info"))
+
     def test_balanced_candidate_uses_the_most_constrained_window(self):
         candidate = codex_mux._balanced_candidate(
             "acc1",

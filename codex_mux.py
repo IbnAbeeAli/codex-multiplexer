@@ -1278,29 +1278,40 @@ def balanced_main(argv: list[str], root: Path | None = None) -> int:
         raise MuxError(f"configuration_error: {reason}")
     ensure_layout(registry, root=root)
     probes_by_name: dict[str, dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=min(len(accounts), 8)) as executor:
-        futures = {
-            executor.submit(
-                probe_account,
-                registry,
-                account,
-                refresh_token=False,
-                timeout=DEFAULT_TIMEOUT,
-                root=root,
-            ): name
-            for name, account in zip(pool, accounts)
-        }
-        for future in as_completed(futures):
-            name = futures[future]
-            try:
-                probes_by_name[name] = future.result()
-            except Exception as exc:
-                probes_by_name[name] = {"name": name, "error": str(exc)}
+    selectable = [
+        (name, account) for name, account in zip(pool, accounts) if name not in excluded
+    ]
+    if selectable:
+        with ThreadPoolExecutor(max_workers=min(len(selectable), 8)) as executor:
+            futures = {
+                executor.submit(
+                    probe_account,
+                    registry,
+                    account,
+                    refresh_token=False,
+                    timeout=DEFAULT_TIMEOUT,
+                    root=root,
+                ): name
+                for name, account in selectable
+            }
+            for future in as_completed(futures):
+                name = futures[future]
+                try:
+                    probes_by_name[name] = future.result()
+                except Exception as exc:
+                    probes_by_name[name] = {"name": name, "error": str(exc)}
     candidates = []
     for name in pool:
-        candidate = _balanced_candidate(name, probes_by_name[name])
         if name in excluded:
-            candidate.update(status="excluded", reason="excluded by the calling workflow")
+            candidate = {
+                "alias": name,
+                "status": "excluded",
+                "remaining_percent": None,
+                "longest_window_remaining_percent": None,
+                "reason": "excluded by the calling workflow",
+            }
+        else:
+            candidate = _balanced_candidate(name, probes_by_name[name])
         candidates.append(candidate)
     rank = sorted(
         (
